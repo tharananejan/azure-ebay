@@ -1,8 +1,8 @@
 services:
   backend:
     build:
-      context: ./backend
-    container_name: backend
+      context: ./back-end
+    container_name: back-end
     ports:
       - "5000:5000"
     environment:
@@ -13,8 +13,8 @@ services:
 
   frontend:
     build:
-      context: ./frontend
-    container_name: frontend
+      context: ./front-end
+    container_name: front-end
     ports:
       - "5000:80"
     depends_on:
