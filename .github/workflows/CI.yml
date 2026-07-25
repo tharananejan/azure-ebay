@@ -1,21 +1,38 @@
-name: CI
+name: CI/CD
 
 on:
-  push:
-    branches:
-      - main
-      - master
+  workflow_dispatch:
   pull_request:
     branches:
       - main
-      - master
+    types:
+      - opened
+      - synchronize
+      - reopened
+  push:
+    branches:
+      - main
+
+env:
+  NODE_VERSION: 22
 
 jobs:
-  backend:
+  test:
+    name: Validate backend and frontend
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            working-directory: ./back-end
+            command: node --check src/server.js
+          - name: frontend
+            working-directory: ./front-end
+            command: npm run build
     defaults:
       run:
-        working-directory: ./back-end
+        working-directory: ${{ matrix.working-directory }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -23,34 +40,66 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: back-end/package-lock.json
+          cache-dependency-path: ${{ matrix.working-directory }}/package-lock.json
 
-      - name: Install backend dependencies
+      - name: Install dependencies
         run: npm ci
 
-      - name: Check backend syntax
-        run: node --check src/server.js
+      - name: Run validation
+        run: ${{ matrix.command }}
 
-  frontend:
+  build-and-push:
+    name: Build and push Docker images to Azure Container Registry
+    needs: test
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./front-end
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            context: ./back-end
+            dockerfile: ./back-end/Dockerfile
+            image-name: azure-ebay-backend
+          - name: frontend
+            context: ./front-end
+            dockerfile: ./front-end/Dockerfile
+            image-name: azure-ebay-frontend
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Azure login
+        uses: azure/login@v2
         with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: front-end/package-lock.json
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Install frontend dependencies
-        run: npm ci
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build frontend
-        run: npm run build
+      - name: Log in to Azure Container Registry
+        run: az acr login --name ${{ secrets.ACR_NAME }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.ACR_LOGIN_SERVER }}/${{ matrix.image-name }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-
+            type=ref,event=pr,prefix=pr-
+            type=ref,event=branch,prefix=branch-
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
