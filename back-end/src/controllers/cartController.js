@@ -160,8 +160,11 @@ const checkout = async (req, res) => {
     // Generate .txt receipt
     const receiptInfo = generateReceipt(cart, detailedItems, totalBalance);
 
+    // Delete cart from database
+    await Cart.findOneAndDelete({ id });
+
     res.status(200).json({
-      message: 'Checkout successful. Receipt generated.',
+      message: 'Checkout successful. Receipt generated and cart deleted.',
       cartId: cart.id,
       customerName: cart.customerName,
       totalBalance,
@@ -174,10 +177,80 @@ const checkout = async (req, res) => {
   }
 };
 
+// Delete cart (Actor/System)
+const deleteCart = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const cart = await Cart.findOneAndDelete({ id });
+    if (!cart) {
+      return res.status(404).json({ message: `Cart with ID '${id}' not found` });
+    }
+    res.status(200).json({ message: 'Cart deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Update cart item quantity
+const updateCartItemQty = async (req, res) => {
+  try {
+    const { id, sku } = req.params;
+    const { qty } = req.body;
+
+    const cart = await Cart.findOne({ id });
+    if (!cart) {
+      return res.status(404).json({ message: `Cart with ID '${id}' not found` });
+    }
+
+    const targetQty = Number(qty);
+    if (isNaN(targetQty) || targetQty <= 0) {
+      // Remove item if qty <= 0
+      cart.items = cart.items.filter(item => item.sku !== sku);
+    } else {
+      const item = cart.items.find(item => item.sku === sku);
+      if (item) {
+        item.qty = targetQty;
+      } else {
+        // If not found, add it
+        cart.items.push({ sku, qty: targetQty });
+      }
+    }
+
+    await cart.save();
+    const { detailedItems, totalBalance } = await calculateCartTotals(cart);
+    res.status(200).json({ message: 'Cart updated successfully', cart, detailedItems, totalBalance });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Remove item from cart
+const removeItemFromCart = async (req, res) => {
+  try {
+    const { id, sku } = req.params;
+
+    const cart = await Cart.findOne({ id });
+    if (!cart) {
+      return res.status(404).json({ message: `Cart with ID '${id}' not found` });
+    }
+
+    cart.items = cart.items.filter(item => item.sku !== sku);
+    await cart.save();
+
+    const { detailedItems, totalBalance } = await calculateCartTotals(cart);
+    res.status(200).json({ message: 'Item removed from cart', cart, detailedItems, totalBalance });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   createCart,
   addItemToCart,
   getCartBalance,
   getCart,
-  checkout
+  checkout,
+  deleteCart,
+  updateCartItemQty,
+  removeItemFromCart
 };
